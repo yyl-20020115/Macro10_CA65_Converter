@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "Macro10_CA65_Converter": {
+      "commandName": "Project",
+      "commandLineArgs": "m6502.asm",
+      "workingDirectory": "D:\\Working\\BASIC-M6502"
+    }
+  }
+}

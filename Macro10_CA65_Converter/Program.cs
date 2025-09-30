@@ -1,12 +1,9 @@
-﻿using System.Collections.Generic;
-using System.Text;
-using System.Xml.Linq;
+﻿using System.Text;
 
 namespace Macro10_CA65_Converter;
 
 internal class Program
 {
-    static readonly HashSet<string> ifs = ["IFE", "IFN", "DEFINE"];
     static readonly HashSet<string> directives =
     [
         "PAGE", "SUBTTL", "TITLE", "SEARCH", "SALL"
@@ -96,48 +93,61 @@ internal class Program
         }
     }
     static int radix = 10;
-    static List<Block>? Blockize(string text, ref int i, ref int col, ref int ln, Stack<(int, int, int)> stack)
+    static List<Block>? Blockize(TextReader reader, ref int ln, ref int col, Stack<(int, int)> stack, List<Block>? blocks)
     {
-        var blocks = new List<Block>();
         var builder = new StringBuilder();
         uint line_end_count = 0;
-
-        for (; i < text.Length; )
+        char tail0 = '\0';
+        char tail1 = '\0';
+        int v;
+        int quoting = 0;
+        int angles = 0;
+        while (-1 != (v = reader.Peek()))
         {
             line_end_count %= 2;
-            char c = text[i];
+            char c = (char)v;
+            if (c == '"')
+            {
+                quoting ++;
+            }
             switch (c)
             {
                 case '\r': //\r\n
                 case '\n':
+                    tail1 = tail0;
+                    tail0 = c;
                     ++line_end_count;
                     break;
                 case '>':
+                    --angles;
                     {
                         var _text = builder.ToString();
-                        blocks.Add(new() { Text = _text });
-                        ++i;
+                        blocks?.Add(new() { Text = _text });
+                        reader.Read();
                         if (stack.Count > 0)
                         {
                             stack.Pop();
                             return blocks;
                         }
-                        else
-                        {
-
-                        }
                         break;
                     }
                 case '<':
+                    ++angles;
+                    if (quoting > 0)
                     {
-                        blocks.Add(new() { Text = builder.ToString() });
+                        // inside quotes, treat as normal char
+                        goto default;
+                    }
+                    else
+                    {
+                        blocks?.Add(new() { Text = builder.ToString() });
                         builder.Clear();
-                        stack.Push((i, col, ln));
-                        ++i;
-                        blocks.Add(new()
+                        stack.Push((ln, col));
+                        reader.Read();
+                        blocks?.Add(new()
                         {
                             Pre = "<",
-                            Children = Blockize(text, ref i, ref col, ref ln, stack),
+                            Children = Blockize(reader, ref ln, ref col, stack, []),
                             Post = ">"
                         });
                     }
@@ -149,73 +159,80 @@ internal class Program
             ++col;
             if (line_end_count == 2)
             {
-                if (text[i - 1] != '\r' && text[i - 1] != '\n')
+                angles = 0;
+                quoting = 0;
+                col = 1;
+                ln++;
+                line_end_count = 0;
+                builder.Append(tail1);
+                builder.Append(tail0);
+                tail0 = '\0';
+                tail1 = '\0';
+                var line = builder.ToString();
+                builder.Clear();
+
+                var parts = line.Split(['\r', '\n', '\t', '\f', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && parts[0].Equals("COMMENT", StringComparison.OrdinalIgnoreCase))
                 {
-                    line_end_count = 0;
+                    reader.Read();
+                    string val = "";
+                    var end = parts[1];
+                    while (-1 != (v = reader.Read()))
+                    {
+                        val += (char)v;
+                        if (val.EndsWith(end, StringComparison.Ordinal))
+                        {
+                            break;
+                        }
+                    }
+
+                    blocks?.Add(new Block() { Text = $"{line}{val}" });
+                    continue;
+                }
+                else if (parts.Length > 1 && parts[0].Equals("RADIX", StringComparison.OrdinalIgnoreCase))
+                {
+                    radix = int.TryParse(parts[1], out radix) ? radix : 10;
+                    blocks?.Add(new() { Text = $";{line}" });
+                }
+                else if (parts.Length > 0 && (directives.Contains(parts[0].ToUpperInvariant()) || line.StartsWith('$')))
+                {
+                    blocks?.Add(new() { Text = $";{line}" });
+                }
+                else if (line.IndexOf(';') is int p && p >= 0)
+                {
+                    blocks?.Add(new() { Text = line[..p] });
+                    blocks?.Add(new() { Text = line[p..] });
                 }
                 else
                 {
-                    col = 1;
-                    ln++;
-                    line_end_count = 0;
-                    builder.Append(text[i - 1]);
-                    builder.Append(text[i - 0]);
-                    var line = builder.ToString();
-                    builder.Clear();
-
-                    var sp = i - line.Length + 1;
-                    var parts = line.Split(['\r', '\n', '\t', '\f', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (parts.Length == 2 && parts[0].Equals("COMMENT", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var end = parts[1];
-                        var ep = text.IndexOf(end, i + 1);
-
-                        if (ep >= 0)
-                        {
-                            ep += end.Length;
-
-                            blocks.Add(new Block() { Text = $"{text[sp..ep]}" });
-                            i = ep;
-                            continue;
-                        }
-
-                    }
-                    else if (parts.Length > 1 && parts[0].Equals("RADIX", StringComparison.OrdinalIgnoreCase))
-                    {
-                        radix = int.TryParse(parts[1], out radix) ? radix : 10;
-                        blocks.Add(new() { Text = $";{line}" });
-                    }
-                    else if (parts.Length > 0 && (directives.Contains(parts[0].ToUpperInvariant()) || line.StartsWith('$')))
-                    {
-                        blocks.Add(new() { Text = $";{line}" });
-                    }
-                    else
-                    {
-                        blocks.Add(new() { Text = $"{line}" });
-                    }
+                    blocks?.Add(new() { Text = $"{line}" });
                 }
+
             }
-            ++i;
+            reader.Read();
         }
-
+        if (builder.Length > 0)
+        {
+            blocks?.Add(new() { Text = builder.ToString() });
+        }
         return blocks;
-
     }
+
+
     static int ConvertFile(string input, string output, params string[] includes)
     {
-        var text = File.ReadAllText(input);
-        int i = 0, col=1,ln = 1;
-        Stack<(int, int, int)> stack = new();
-
-        var blocks = Blockize(text, ref i,ref col, ref ln, stack);
-
+        int ln = 1, col = 1;
+        Stack<(int, int)> stack = new();
         using var reader = new StreamReader(input);
         using var writer = new StreamWriter(output);
+
+        var blocks = Blockize(reader, ref ln, ref col, stack, []);
+
         foreach (var include in includes)
         {
             writer.WriteLine($".INCLUDE \"{include}\"");
         }
-        foreach(var block in blocks ?? [])
+        foreach (var block in blocks ?? [])
         {
             writer.Write(block);
         }

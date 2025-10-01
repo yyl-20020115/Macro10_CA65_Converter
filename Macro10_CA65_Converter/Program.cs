@@ -306,10 +306,6 @@ internal class Program
                     --angles;
                     {
                         text = builder.ToString();
-                        if (text.Trim().StartsWith(';'))
-                        {
-
-                        }
                         blocks?.AddRange(ParseLine(text, [], ln, col - text.Length) ?? []);
                         reader.Read();
                         if (stack.Count > 0)
@@ -484,6 +480,7 @@ internal class Program
         var final_blocks = new List<Block>();
         Block? previous = null;
         Block? header = null;
+        var post_comma = false;
         foreach (var block in blocks ?? [])
         {
             if (block == null) continue;
@@ -492,9 +489,14 @@ internal class Program
                 block.Header = header;
                 header.Parts?.Add(block);
             }
-            if (block.Type == BlockType.Container)
+            if (post_comma && block.Type == BlockType.Container)
             {
                 header = null;
+                post_comma = false;
+            }
+            if(!post_comma && block.Type == BlockType.Operator && block.Text == ",")
+            {
+                post_comma = true;
             }
             if (block.Type == BlockType.Identifier
                 )
@@ -503,6 +505,7 @@ internal class Program
                 {
                     header = block;
                     block.Parts = [];
+                    post_comma = false;
                 }
                 if (block.Text != null)
                 {
@@ -719,11 +722,14 @@ internal class Program
                                 while (enumerator.MoveNext())
                                 {
                                     next = enumerator.Current;
-                                    if (next.Text == null || next.Text == Environment.NewLine)
+                                    if (next.Text == Environment.NewLine)
+                                    {
                                         break;
+                                    }
                                     if (next.Type == BlockType.Operator
                                         && next.Text == ",")
                                     {
+                                        //local_blocks.Add(next);
                                         local_blocks.Add(new() { Text = v == 1 ? " = " : " <> ", Type = BlockType.Operator });
                                         local_blocks.Add(new() { Text = "0", Type = BlockType.Identifier });
                                         break;
@@ -787,6 +793,7 @@ internal class Program
         Stack<(int, int)> stack = new();
         using var reader = new StreamReader(input);
         using var writer = new StreamWriter(output);
+        //using var reader = new StringReader("IFN\t<<BUF+BUFLEN>/256>-<<BUF-1>/256>,<\r\n\tDEC\tTXTPTR+1>");
 
         var blocks
             = ProcessBlocks(

@@ -77,7 +77,7 @@ public class AssemblyConverter
     }
     public const string COMMENT_DIRECTIVE = "COMMENT";
     public const string RADIX_DIRECTIVE = "RADIX";
-    public static int Radix { get; protected set; } = 8;
+    public static int Radix = 8;
 
     public static Block TryCorrectNumber(Block block, Block? previous)
     {

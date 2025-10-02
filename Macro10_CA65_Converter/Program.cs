@@ -6,7 +6,7 @@ internal class Program
 {
     static readonly HashSet<string> DIRECTIVES =
     [
-        "PAGE", "SUBTTL", "TITLE", "SEARCH", "SALL",".XCREF",".CREF"
+        "PAGE", "SUBTTL", "TITLE", "SEARCH", "SALL",".XCREF",".CREF","XLIST","LIST"
     ];
     static readonly HashSet<string> MACROS = [
         "IFE", "IFN", "DEFINE","IF1","IF2"
@@ -19,7 +19,7 @@ internal class Program
     static string ConvertNumberText(string? text, int radix)
     {
         if (string.IsNullOrEmpty(text)) return "";
-        var output_hex = true;
+        var output_hex = false;
         var done = false;
         uint value = 0;
         switch (text[0])
@@ -93,6 +93,7 @@ internal class Program
     {
         public string? Text;
         public string? Pre;
+        public Block? Parent;
         public List<Block>? Children;
         public string? Post;
         public BlockType? Type;
@@ -100,6 +101,122 @@ internal class Program
         public List<Block>? Parts;
         public int? LineNumber;
         public int? ColumnNumber;
+        public Block? Previous;
+        public Block? Next;
+        public Block? LineStart
+        {
+            get
+            {
+                if (this.Previous == null) return this;
+                var previous = this;
+                while (previous != null)
+                {
+                    if (previous.LineNumber != this.LineNumber)
+                        return previous.Next;
+                    if (previous.Text == Environment.NewLine 
+                        || previous.Pre == Environment.NewLine)
+                    {
+                        return previous.Next;
+                    }
+                    previous = previous.Previous;
+                }
+                return null;
+            }
+        }
+        public string LineText => this.LineStart is Block start
+            && start != null ? start.ToEndOfLineText : "";
+        public string ToEndOfLineText
+        {
+            get
+            {
+                var builder = new StringBuilder();
+                var next = this;
+                while (next != null)
+                {
+                    var text = next.ToString();
+                    var index = text.IndexOf(Environment.NewLine);
+                    if (index >= 0)
+                    {
+                        text = text[..index];
+                    }
+                    builder.Append(text);
+                    if (index >= 0) break;
+                    next = next.Next;
+                }
+                return builder.ToString();
+            }
+        }
+        public Block? PreviousNonWhiteSpace
+        {
+            get
+            {
+                var previous = Previous;
+                while (previous != null)
+                {
+                    if (previous.Type != BlockType.WhiteSpace)
+                        return previous;
+                    previous = previous.Previous;
+                }
+                return previous;
+            }
+        }
+        public Block? NextNonWhiteSpace
+        {
+            get
+            {
+                var next = Next;
+                while (next != null)
+                {
+                    if (next.Type != BlockType.WhiteSpace)
+                        return next;
+                    next = next.Next;
+                }
+                return next;
+            }
+        }
+        public Block? FollowingNonSpace(int n)
+        {
+            var nsp = this;
+            for (int i = 0; i < n; i++)
+            {
+                if (nsp == null) return null;
+                nsp = nsp.NextNonWhiteSpace;
+            }
+            return nsp;
+        }
+        public Block? ForwardingNonSpace(int n)
+        {
+            var nsp = this;
+            for (int i = 0; i < n; i++)
+            {
+                if (nsp == null) return null;
+                nsp = nsp.PreviousNonWhiteSpace;
+            }
+            return nsp;
+        }
+        public Block? FindFollowingByHeader(string text, BlockType type)
+        {
+            var next = this.Next;
+            while (next != null && next.Header == this.Header)
+            {
+                if (next.Type == type && next.Text == text)
+                    return next;
+                next = next.Next;
+            }
+            return null;
+        }
+        public Block? FindFollowingByLineNumber(string text, BlockType type)
+        {
+            var next = this.Next;
+            while (next != null && next.LineNumber == this.LineNumber)
+            {
+                if (next.Type == type && next.Text == text)
+                    return next;
+                next = next.Next;
+            }
+            return null;
+        }
+
         public override string ToString()
         {
             var builder = new StringBuilder();
@@ -121,6 +238,50 @@ internal class Program
     }
     static int radix = 8;
 
+    static Block? TryCorrectNumber(Block? block, Block? previous)
+    {
+        if (block != null && block.Text != null)
+        {
+            if (block.Type == BlockType.Identifier)
+            {
+                var prefix = false;
+                if (previous != null && previous.Text == "^")
+                {
+                    previous.Text = "";
+                    previous.Type = BlockType.WhiteSpace;
+                    prefix = true;
+                }
+                if (char.ToUpper(block.Text[0]) == 'O')
+                {
+                    if (block.Text[1..].All(p => p >= '0' && p <= '7'))
+                    {
+                        block.Type = BlockType.Number;
+                        block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, 8);
+                    }
+                }
+                else if (char.ToUpper(block.Text[0]) == 'H')
+                {
+                    if (block.Text[1..].All(p => p >= '0' && p <= '9' || (p >= 'a' && p <= 'f') || (p >= 'A' && p <= 'F')))
+                    {
+                        block.Type = BlockType.Number;
+                        block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, 16);
+                    }
+                }
+            }
+            else if (block.Type == BlockType.Number)
+            {
+                var prefix = false;
+                if (previous != null && previous.Text == "^")
+                {
+                    previous.Text = "";
+                    previous.Type = BlockType.WhiteSpace;
+                    prefix = true;
+                }
+                block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, radix);
+            }
+        }
+        return block;
+    }
     static List<Block>? ParseLine(string line, List<Block>? local_list, int ln, int col)
     {
         var local_builder = new StringBuilder();
@@ -128,6 +289,8 @@ internal class Program
         int v;
         char c;
         char last_c = '\0';
+        var quoting = false;
+        Block? block = null, previous = null;
         while (-1 != (v = local_reader.Peek()))
         {
             var any = false;
@@ -146,7 +309,7 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
-                local_list.Add(
+                local_list?.Add(
                     new()
                     {
                         Text = text,
@@ -172,8 +335,9 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
-                local_list.Add(
-                    new()
+                previous = block;
+                local_list?.Add(
+                    block = new()
                     {
                         Text = text,
                         Type = BlockType.WhiteSpace,
@@ -197,14 +361,19 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
-                local_list.Add(
-                    new()
+                previous = block;
+                local_list?.Add(
+                    block = new()
                     {
                         Text = text,
                         Type = BlockType.Number,
                         LineNumber = ln,
                         ColumnNumber = start,
                     });
+                if (!quoting)
+                {
+                    TryCorrectNumber(block, previous);
+                }
             }
             if (char.IsLetter(c))
             {
@@ -220,14 +389,19 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
-                local_list.Add(
-                    new()
+                previous = block;
+                local_list?.Add(
+                    block = new()
                     {
                         Text = text,
                         Type = BlockType.Identifier,
                         LineNumber = ln,
                         ColumnNumber = start,
                     });
+                if (!quoting)
+                {
+                    TryCorrectNumber(block, previous);
+                }
             }
             if (v == -1) break;
             if (char.IsPunctuation(c) || char.IsSymbol(c))
@@ -238,12 +412,17 @@ internal class Program
                 do
                 {
                     c = (char)v;
+                    if (c == '"')
+                    {
+                        quoting = !quoting;
+                    }
                     if (!char.IsPunctuation(c) && !char.IsSymbol(c)) break;
                     local_builder.Append(c);
                     local_reader.Read();
                     last_c = c;
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
+                previous = block;
                 text = local_builder.ToString();
                 Block? last = null;
                 col -= text.Length;
@@ -256,8 +435,8 @@ internal class Program
                     }
                     else
                     {
-                        local_list.Add(
-                            last = new()
+                        local_list?.Add(
+                            block = last = new()
                             {
                                 Text = ct.ToString(),
                                 Type = BlockType.Operator,
@@ -325,6 +504,7 @@ internal class Program
                     {
                         ++angles;
                         text = builder.ToString();
+
                         if (text.Trim().StartsWith(';'))
                         {
                             do
@@ -494,12 +674,11 @@ internal class Program
                 header = null;
                 post_comma = false;
             }
-            if(!post_comma && block.Type == BlockType.Operator && block.Text == ",")
+            if (!post_comma && block.Type == BlockType.Operator && block.Text == ",")
             {
                 post_comma = true;
             }
-            if (block.Type == BlockType.Identifier
-                )
+            if (block.Type == BlockType.Identifier)
             {
                 if (MACROS.Contains(block.Text?.ToUpperInvariant() ?? ""))
                 {
@@ -507,31 +686,17 @@ internal class Program
                     block.Parts = [];
                     post_comma = false;
                 }
-                if (block.Text != null)
+            }
+            else if (block.Type == BlockType.Operator)
+            {
+                switch (block.Text)
                 {
-                    if (char.ToUpper(block.Text[0]) == 'O')
-                    {
-                        if (block.Text[1..].All(p => p >= '0' && p <= '7'))
-                        {
-                            block.Type = BlockType.Number;
-                        }
-                    }
-                    else if (char.ToUpper(block.Text[0]) == 'H')
-                    {
-                        if (block.Text[1..].All(p => p >= '0' && p <= '9' || (p >= 'a' && p <= 'f') || (p >= 'A' && p <= 'F')))
-                        {
-                            block.Type = BlockType.Number;
-                        }
-                    }
+                    case "!":
+                        block.Text = "|";
+                        break;
                 }
             }
 
-            final_blocks.Add(block);
-            previous = block;
-        }
-        for (int i = 0; i < final_blocks.Count; i++)
-        {
-            var block = final_blocks[i];
             if (block.Children != null)
             {
                 if (block.Pre != null)
@@ -543,41 +708,46 @@ internal class Program
                 {
                     block.Post = ")";
                 }
-            }
-        }
-        return final_blocks;
-    }
-
-    static bool TryByteForNumber(List<Block> line, List<Block> final_blocks)
-    {
-        int q = -1;
-        for (var p = line.Count - 2; p >= 0; p--)
-        {
-            var b = line[p];
-            if (b.Type == BlockType.WhiteSpace) q = p;
-            else break;
-        }
-        if (q > 0)
-        {
-            for (var p = line.Count - 2; p >= 0; p--)
-            {
-                var b = line[p];
-                if (b.Type == BlockType.WhiteSpace) continue;
-                if (b.Type == BlockType.Identifier) break;
-                if (b.Type == BlockType.Operator && b.Text == ":")
+                foreach(var child in block.Children ?? [])
                 {
-                    q = p;
-                    break;
+                    child.Parent = block;
                 }
             }
 
+            final_blocks.Add(block);
+            if (previous != null)
+                previous.Next = block;
+            block.Previous = previous;
+            previous = block;
         }
-        if (line.Count == 1 || q == 0 || q > 0 && line[q].Type == BlockType.Operator && line[q].Text == ":")
+
+        return final_blocks;
+    }
+
+    static bool TryByteForNumber(Block? block, List<Block> final_blocks)
+    {
+        if (block == null) return false;
+        var start = block.LineStart;
+        var first = start?.NextNonWhiteSpace;
+        if (start == block ||
+            start !=null &&
+            start.Type== BlockType.WhiteSpace
+            && first == block ||
+            block.PreviousNonWhiteSpace is Block p
+            && p != null 
+            && p.Type == BlockType.Operator 
+            && p.Text == ":")
         {
+
+            if (start!=null && start.Parent!=null && start.Parent.Pre=="(")
+            {
+                return false;
+            }
             final_blocks.Add(new() { Text = ".BYTE", Type = BlockType.Identifier });
             final_blocks.Add(new() { Text = " ", Type = BlockType.WhiteSpace });
             return true;
         }
+
         return false;
     }
 
@@ -616,8 +786,8 @@ internal class Program
             }
             else if (block.Type == BlockType.Number)
             {
-                var fix = TryByteForNumber(line, final_blocks);
-                //block.Text = ConvertNumberText(block.Text, 8);
+
+                TryByteForNumber(block, final_blocks);
             }
             else if (block.Type == BlockType.Operator)
             {
@@ -631,9 +801,43 @@ internal class Program
                         block.Text = "<>";
                         break;
                 }
+                //remove trailing comma
+                if (block.Text == "," && block.NextNonWhiteSpace is Block nt
+                    && nt != null
+                    && nt.Text != null
+                    && (nt.Text.StartsWith(';') || nt.Text == (Environment.NewLine)))
+                {
+                    block.Text = "";
+                    block.Type = BlockType.WhiteSpace;
+                }
             }
             else if (block.Type == BlockType.Identifier)
             {
+                if (block.FindFollowingByLineNumber(",", BlockType.Operator) is Block op
+                    && op != null && (op.Next == null || op.Next != null && op.Next.Text == Environment.NewLine))
+                {
+                    op.Text = "";
+                    op.Type = BlockType.WhiteSpace;
+                    final_blocks.Add(block);
+                    continue;
+                }
+                if (block?.Text?.ToUpper() == "REPEAT"
+                    && block.FindFollowingByHeader(",", BlockType.Operator) is Block comma2
+                    && comma2 != null
+                    && comma2.NextNonWhiteSpace is Block rep && rep != null &&
+                    rep.Pre == "(" && rep.Post == ")")
+                {
+                    rep.Pre = "{";
+                    rep.Post = "}";
+                    final_blocks.Add(block);
+                    continue;
+                }
+                if (block?.Text?.ToUpper() == "XWD")
+                {
+                    block.Text = ".BYTE";
+                    final_blocks.Add(block);
+                    continue;
+                }
                 if (I_INSTRS.Contains(block.Text?.ToUpperInvariant() ?? ""))
                 {
                     block.Text = block?.Text?[..^1] ?? "";
@@ -650,7 +854,7 @@ internal class Program
                         {
                             next.Text = "'";
                         }
-                        if (next.LineNumber > block.LineNumber) break;
+                        if (next.Next != null && next.Next.LineNumber > next.LineNumber) break;
                     }
                     continue;
                 }
@@ -669,7 +873,7 @@ internal class Program
                     switch (v)
                     {
                         case 5:
-                            block.Text = ".out";
+                            block.Text = ".OUT";
                             if (enumerator.MoveNext())
                             {
                                 var next = enumerator.Current;
@@ -754,21 +958,40 @@ internal class Program
             {
                 if (block.Header != null)
                 {
-                    block.Pre = Environment.NewLine;
+                    block.Pre = "";
+                    block.Post = "";
+                    var pre_child = new Block { Text = Environment.NewLine, Type = BlockType.WhiteSpace };
+                    var post_pre_child = new Block { Text = Environment.NewLine, Type = BlockType.WhiteSpace };
+                    Block? post_child = null;
                     ++ln;
                     switch (block.Header.Text.ToUpperInvariant())
                     {
                         case ".IF":
-                            block.Post = Environment.NewLine + ".ENDIF";
+                            post_child = new Block { Text = ".ENDIF", Type = BlockType.Identifier };
+                            //block.Post = Environment.NewLine + ".ENDIF";
                             ++ln;
                             break;
                         case ".MACRO":
-                            block.Post = Environment.NewLine + ".ENDMACRO";
+                            post_child = new Block { Text = ".ENDMACRO", Type = BlockType.Identifier };
+                            //block.Post = Environment.NewLine + ".ENDMACRO";
                             ++ln;
                             break;
                     }
+
+                    block.Children.Insert(0, pre_child);
+
+                    block.Children = ProcessBlocks(block.Children, ref ln);
+
+                    block.Children?.Add(post_pre_child);
+                    if (post_child != null)
+                    {
+                        block.Children?.Add(post_child);
+                    }
                 }
-                block.Children = ProcessBlocks(block.Children, ref ln);
+                else
+                {
+                    block.Children = ProcessBlocks(block.Children, ref ln);
+                }
             }
             final_blocks.Add(block);
             if (local_blocks.Count > 0)
@@ -783,7 +1006,11 @@ internal class Program
                 ln++;
                 line.Clear();
             }
-
+            if (block.PreviousNonWhiteSpace is Block p && block.NextNonWhiteSpace is Block n
+                && p != null && n != null && p.Text == "(" && n.Text == ")")
+            {
+                //TODO:
+            }
         }
         return final_blocks;
     }

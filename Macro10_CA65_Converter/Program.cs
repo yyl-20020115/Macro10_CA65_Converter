@@ -27,7 +27,7 @@ internal class Program
             case '^':
                 switch (char.ToUpper(text[1]))
                 {
-                    case '0':
+                    case 'D':
                         done = uint.TryParse(text[2..], out value);
                         break;
                     case 'H':
@@ -88,6 +88,7 @@ internal class Program
         Comment,
         Operator,
         Container,
+        String,
     }
     public class Block
     {
@@ -113,11 +114,6 @@ internal class Program
                 {
                     if (previous.LineNumber != this.LineNumber)
                         return previous.Next;
-                    if (previous.Text == Environment.NewLine 
-                        || previous.Pre == Environment.NewLine)
-                    {
-                        return previous.Next;
-                    }
                     previous = previous.Previous;
                 }
                 return null;
@@ -146,6 +142,35 @@ internal class Program
                 return builder.ToString();
             }
         }
+        public Block? SelfAndPreviousNonWhiteSpace
+        {
+            get
+            {
+                var previous = this;
+                while (previous != null)
+                {
+                    if (previous.Type != BlockType.WhiteSpace)
+                        return previous;
+                    previous = previous.Previous;
+                }
+                return previous;
+            }
+        }
+        public Block? SelfAndNextNonWhiteSpace
+        {
+            get
+            {
+                var next =this;
+                while (next != null)
+                {
+                    if (next.Type != BlockType.WhiteSpace)
+                        return next;
+                    next = next.Next;
+                }
+                return next;
+            }
+        }
+
         public Block? PreviousNonWhiteSpace
         {
             get
@@ -205,6 +230,19 @@ internal class Program
             }
             return null;
         }
+
+        public Block? FindFollowingByLineNumber(BlockType type)
+        {
+            var next = this.Next;
+            while (next != null && next.LineNumber == this.LineNumber)
+            {
+                if (next.Type == type)
+                    return next;
+                next = next.Next;
+            }
+            return null;
+        }
+
         public Block? FindFollowingByLineNumber(string text, BlockType type)
         {
             var next = this.Next;
@@ -213,6 +251,30 @@ internal class Program
                 if (next.Type == type && next.Text == text)
                     return next;
                 next = next.Next;
+            }
+            return null;
+        }
+
+        public Block? FindForwardingByLineNumber(BlockType type)
+        {
+            var previous = this.Previous;
+            while (previous != null && previous.LineNumber == this.LineNumber)
+            {
+                if (previous.Type == type)
+                    return previous;
+                previous = previous.Previous;
+            }
+            return null;
+        }
+
+        public Block? FindForwardingByLineNumber(string text, BlockType type)
+        {
+            var previous = this.Previous;
+            while (previous != null && previous.LineNumber == this.LineNumber)
+            {
+                if (previous.Type == type && previous.Text == text)
+                    return previous;
+                previous = previous.Previous;
             }
             return null;
         }
@@ -238,8 +300,9 @@ internal class Program
     }
     static int radix = 8;
 
-    static Block? TryCorrectNumber(Block? block, Block? previous)
+    static Block TryCorrectNumber(Block block,Block? previous)
     {
+        previous = previous?.SelfAndPreviousNonWhiteSpace;
         if (block != null && block.Text != null)
         {
             if (block.Type == BlockType.Identifier)
@@ -251,7 +314,15 @@ internal class Program
                     previous.Type = BlockType.WhiteSpace;
                     prefix = true;
                 }
-                if (char.ToUpper(block.Text[0]) == 'O')
+                if (char.ToUpper(block.Text[0]) == 'D')
+                {
+                    if (block.Text[1..].All(p => p >= '0' && p <= '9'))
+                    {
+                        block.Type = BlockType.Number;
+                        block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, 10);
+                    }
+                }
+                else if (char.ToUpper(block.Text[0]) == 'O')
                 {
                     if (block.Text[1..].All(p => p >= '0' && p <= '7'))
                     {
@@ -289,7 +360,8 @@ internal class Program
         int v;
         char c;
         char last_c = '\0';
-        var quoting = false;
+
+        var stack = new Stack<Block>();
         Block? block = null, previous = null;
         while (-1 != (v = local_reader.Peek()))
         {
@@ -309,8 +381,15 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
-                local_list?.Add(
-                    new()
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
+                previous = block;
+
+                stack.Push(
+                    block = new()
                     {
                         Text = text,
                         Type = BlockType.Comment,
@@ -320,6 +399,38 @@ internal class Program
                     });
                 //comment ends everything
                 break;
+            }
+            if (c == '"')
+            {
+                var quoting_count = 0;
+                start = col;
+                any = true;
+                local_builder.Clear();
+                do
+                {
+                    c = (char)v;
+                    local_builder.Append(c);
+                    local_reader.Read();
+                    if (c == '"' && quoting_count >= 2) break;
+                    ++quoting_count;
+                    col++;
+                } while (-1 != (v = local_reader.Peek()));
+                text = local_builder.ToString();
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
+                previous = block;
+                stack.Push(
+                    block = new()
+                    {
+                        Text = text,
+                        Type = BlockType.String,
+                        LineNumber = ln,
+                        ColumnNumber = start,
+                    });
+                continue;
             }
             if (char.IsWhiteSpace(c))
             {
@@ -335,8 +446,13 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
                 previous = block;
-                local_list?.Add(
+                stack.Push(
                     block = new()
                     {
                         Text = text,
@@ -361,19 +477,20 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
                 previous = block;
-                local_list?.Add(
-                    block = new()
+                stack.Push(
+                    TryCorrectNumber(block = new()
                     {
                         Text = text,
                         Type = BlockType.Number,
                         LineNumber = ln,
                         ColumnNumber = start,
-                    });
-                if (!quoting)
-                {
-                    TryCorrectNumber(block, previous);
-                }
+                    },previous));
             }
             if (char.IsLetter(c))
             {
@@ -389,19 +506,20 @@ internal class Program
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
                 text = local_builder.ToString();
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
                 previous = block;
-                local_list?.Add(
-                    block = new()
+                stack.Push(
+                    TryCorrectNumber(block = new()
                     {
                         Text = text,
                         Type = BlockType.Identifier,
                         LineNumber = ln,
                         ColumnNumber = start,
-                    });
-                if (!quoting)
-                {
-                    TryCorrectNumber(block, previous);
-                }
+                    },previous));
             }
             if (v == -1) break;
             if (char.IsPunctuation(c) || char.IsSymbol(c))
@@ -412,16 +530,17 @@ internal class Program
                 do
                 {
                     c = (char)v;
-                    if (c == '"')
-                    {
-                        quoting = !quoting;
-                    }
-                    if (!char.IsPunctuation(c) && !char.IsSymbol(c)) break;
+                    if (c=='"' || !char.IsPunctuation(c) && !char.IsSymbol(c)) break;
                     local_builder.Append(c);
                     local_reader.Read();
                     last_c = c;
                     col++;
                 } while (-1 != (v = local_reader.Peek()));
+                if (previous != null && block != null)
+                {
+                    previous.Next = block;
+                    block.Previous = previous;
+                }
                 previous = block;
                 text = local_builder.ToString();
                 Block? last = null;
@@ -435,7 +554,7 @@ internal class Program
                     }
                     else
                     {
-                        local_list?.Add(
+                        stack.Push(
                             block = last = new()
                             {
                                 Text = ct.ToString(),
@@ -446,12 +565,15 @@ internal class Program
                         col++;
                     }
                 }
+
             }
             if (v == -1) break;
             if (!any)
                 local_reader.Read();
             last_c = c;
         }
+
+        local_list?.AddRange(stack.Reverse());
         return local_list;
     }
     static List<Block>? Blockize(TextReader reader, ref int ln, ref int col, Stack<(int, int)> stack, List<Block>? blocks)
@@ -708,7 +830,7 @@ internal class Program
                 {
                     block.Post = ")";
                 }
-                foreach(var child in block.Children ?? [])
+                foreach (var child in block.Children ?? [])
                 {
                     child.Parent = block;
                 }
@@ -724,22 +846,22 @@ internal class Program
         return final_blocks;
     }
 
-    static bool TryByteForNumber(Block? block, List<Block> final_blocks)
+    static bool TryBytePrefix(Block? block, List<Block> final_blocks)
     {
         if (block == null) return false;
         var start = block.LineStart;
         var first = start?.NextNonWhiteSpace;
         if (start == block ||
-            start !=null &&
-            start.Type== BlockType.WhiteSpace
+            start != null &&
+            start.Type == BlockType.WhiteSpace
             && first == block ||
             block.PreviousNonWhiteSpace is Block p
-            && p != null 
-            && p.Type == BlockType.Operator 
+            && p != null
+            && p.Type == BlockType.Operator
             && p.Text == ":")
         {
 
-            if (start!=null && start.Parent!=null && start.Parent.Pre=="(")
+            if (start != null && start.Parent != null && start.Parent.Pre == "(")
             {
                 return false;
             }
@@ -763,31 +885,17 @@ internal class Program
             var block = enumerator.Current;
             if (block == null) continue;
             line.Add(block);
-            if (block.Type == BlockType.Operator && block.Text == "^")
+            if (block.Type == BlockType.String)
             {
-                block.Text = "";
-                block.Type = BlockType.WhiteSpace;
-                Block? next = null;
-                while (enumerator.MoveNext())
+                if(block.Text!=null&& block.Text.Length == 3)
                 {
-                    next = enumerator.Current;
-                    if (next == null) continue;
-                    final_blocks.Add(next);
-
-                    if (next.Type == BlockType.Identifier &&
-                        next.Text.StartsWith("O", StringComparison.InvariantCultureIgnoreCase)
-                        || next.Type == BlockType.Number)
-                    {
-                        next.Text = ConvertNumberText("^" + next.Text, 8);
-                        next.Type = BlockType.Number;
-                        break;
-                    }
+                    block.Text = $"\'{block.Text[1..^1]}\'";
                 }
+                TryBytePrefix(block, final_blocks);
             }
             else if (block.Type == BlockType.Number)
             {
-
-                TryByteForNumber(block, final_blocks);
+                TryBytePrefix(block, final_blocks);
             }
             else if (block.Type == BlockType.Operator)
             {
@@ -801,6 +909,18 @@ internal class Program
                         block.Text = "<>";
                         break;
                 }
+                if (block.Text == "." && block.NextNonWhiteSpace is Block nwsp &&
+                    nwsp != null && nwsp.Type == BlockType.Operator && nwsp.Text == "+")
+                {
+                    block.Text = "*";
+                }
+                if (block.Text == "%" && block.NextNonWhiteSpace is Block nwid &&
+                    nwid != null)
+                {
+                    block.Text = "";
+                    block.Type = BlockType.WhiteSpace;
+                }
+
                 //remove trailing comma
                 if (block.Text == "," && block.NextNonWhiteSpace is Block nt
                     && nt != null
@@ -813,6 +933,24 @@ internal class Program
             }
             else if (block.Type == BlockType.Identifier)
             {
+                //fix .BYTE
+                if(false && block.FindForwardingByLineNumber(":",BlockType.Operator) is Block fwd && fwd!=null)
+                {
+                    if(fwd == block.PreviousNonWhiteSpace)
+                    {
+                        if (block.FindFollowingByLineNumber(Environment.NewLine, BlockType.WhiteSpace)
+                            is Block ends && ends == block.NextNonWhiteSpace
+                            || block.FindFollowingByLineNumber(BlockType.Comment) is Block cmt &&
+                            cmt==block.NextNonWhiteSpace
+                            )
+                        {
+                            final_blocks.Add(new() { Text = ".BYTE", Type = BlockType.Identifier });
+                            final_blocks.Add(new() { Text = " ", Type = BlockType.WhiteSpace });
+                            final_blocks.Add(block);
+                            continue;
+                        }
+                    }                    
+                }
                 if (block.FindFollowingByLineNumber(",", BlockType.Operator) is Block op
                     && op != null && (op.Next == null || op.Next != null && op.Next.Text == Environment.NewLine))
                 {
@@ -850,9 +988,9 @@ internal class Program
                         var next = enumerator.Current;
                         if (next == null) continue;
                         final_blocks.Add(next);
-                        if (next.Type == BlockType.Operator && next.Text == "\"")
+                        if (next.Type == BlockType.String)
                         {
-                            next.Text = "'";
+                            next.Text = $"'{next.Text[1..^1]}'";
                         }
                         if (next.Next != null && next.Next.LineNumber > next.LineNumber) break;
                     }
@@ -879,13 +1017,16 @@ internal class Program
                                 var next = enumerator.Current;
                                 local_blocks.Add(next);
                             }
-                            local_blocks.Add(new() { Text = "\"", Type = BlockType.Operator });
+                            var builder = new StringBuilder();
+                            builder.Append('"');
                             while (enumerator.MoveNext())
                             {
                                 var next = enumerator.Current;
-                                local_blocks.Add(next);
+                                builder.Append(next.Text);
                             }
-                            local_blocks.Add(new() { Text = "\"", Type = BlockType.Operator });
+                            builder.Append('"');
+                            local_blocks.Add(new() { Text = builder.ToString(),
+                                Type = BlockType.String });
                             break;
                         case 3:
                         case 4:
@@ -1001,15 +1142,8 @@ internal class Program
             }
             if (block.Text != null && block.Text.EndsWith(Environment.NewLine))
             {
-                //if (line[^2].Type == BlockType.Identifier)
-                //TryByteForIdentifier(line.Count -3, line,final_blocks);
                 ln++;
                 line.Clear();
-            }
-            if (block.PreviousNonWhiteSpace is Block p && block.NextNonWhiteSpace is Block n
-                && p != null && n != null && p.Text == "(" && n.Text == ")")
-            {
-                //TODO:
             }
         }
         return final_blocks;

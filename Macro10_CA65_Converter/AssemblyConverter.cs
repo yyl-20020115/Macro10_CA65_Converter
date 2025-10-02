@@ -10,11 +10,11 @@ public class AssemblyConverter
     ];
     public static readonly HashSet<string> MACROS = [
         "IFE", "IFN", "DEFINE","IF1","IF2"
-        ];
+    ];
     public static readonly HashSet<string> I_INSTRS = [
         "ADCI","ANDI","CMPI","CPXI","CPYI",
         "EORI","LDAI","LDXI","LDYI","ORAI","SBCI"
-        ];
+    ];
     public static string ConvertNumberText(string? text, int radix)
     {
         if (string.IsNullOrEmpty(text)) return "";
@@ -77,7 +77,7 @@ public class AssemblyConverter
     }
     public const string COMMENT_DIRECTIVE = "COMMENT";
     public const string RADIX_DIRECTIVE = "RADIX";
-    public static int radix = 8;
+    public static int Radix { get; protected set; } = 8;
 
     public static Block TryCorrectNumber(Block block, Block? previous)
     {
@@ -127,7 +127,7 @@ public class AssemblyConverter
                     previous.Type = BlockType.WhiteSpace;
                     prefix = true;
                 }
-                block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, radix);
+                block.Text = ConvertNumberText(prefix ? ("^" + block.Text) : block.Text, Radix);
             }
         }
         return block;
@@ -496,7 +496,7 @@ public class AssemblyConverter
                 }
                 else if (parts.Length > 1 && parts[0].Equals(RADIX_DIRECTIVE, StringComparison.OrdinalIgnoreCase))
                 {
-                    radix = int.TryParse(parts[1], out radix) ? radix : 10;
+                    Radix = int.TryParse(parts[1], out Radix) ? Radix : 10;
                     blocks?.Add(new()
                     {
                         Text = $";{line}",
@@ -555,7 +555,6 @@ public class AssemblyConverter
         }
         return blocks;
     }
-
     public static List<Block>? PreprocessBlocks(List<Block>? blocks, int depth)
     {
         var final_blocks = new List<Block>();
@@ -624,7 +623,6 @@ public class AssemblyConverter
 
         return final_blocks;
     }
-
     public static bool TryBytePrefix(Block? block, List<Block> final_blocks)
     {
         if (block == null) return false;
@@ -651,7 +649,6 @@ public class AssemblyConverter
 
         return false;
     }
-
     public static List<Block>? ProcessBlocks(List<Block>? blocks, ref int ln)
     {
         if (blocks == null) return blocks;
@@ -953,5 +950,4 @@ public class AssemblyConverter
 
         return 0;
     }
-
 }

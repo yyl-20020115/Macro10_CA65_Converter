@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "BinaryCutter": {
+      "commandName": "Project",
+      "commandLineArgs": "m6502-nes.bin",
+      "workingDirectory": "D:\\Working\\BASIC-M6502"
+    }
+  }
+}

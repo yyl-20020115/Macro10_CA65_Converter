@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Macro10_CA65_Converter;
 
@@ -15,6 +16,64 @@ public class AssemblyConverter
         "ADCI","ANDI","CMPI","CPXI","CPYI",
         "EORI","LDAI","LDXI","LDYI","ORAI","SBCI"
     ];
+    public static readonly HashSet<string> INSTRUCTIONS = [
+        "ADC",
+        "AND",
+        "ASL",
+        "BCC",
+        "BCS",
+        "BEQ",
+        "BIT",
+        "BMI",
+        "BNE",
+        "BPL",
+        "BRK",
+        "BVC",
+        "BVS",
+        "CLC",
+        "CLD",
+        "CLI",
+        "CLV",
+        "CMP",
+        "CPX",
+        "CPY",
+        "DEC",
+        "DEX",
+        "DEY",
+        "EOR",
+        "INC",
+        "INX",
+        "INY",
+        "JMP",
+        "JSR",
+        "LDA",
+        "LDX",
+        "LDY",
+        "LSR",
+        "NOP",
+        "ORA",
+        "PHA",
+        "PHP",
+        "PLA",
+        "PLP",
+        "ROL",
+        "ROR",
+        "RTI",
+        "RTS",
+        "SBC",
+        "SEC",
+        "SED",
+        "SEI",
+        "STA",
+        "STX",
+        "STY",
+        "TAX",
+        "TAY",
+        "TSX",
+        "TXA",
+        "TXS",
+        "TYA"
+        ];
     public static string ConvertNumberText(string? text, int radix)
     {
         if (string.IsNullOrEmpty(text)) return "";
@@ -637,7 +696,6 @@ public class AssemblyConverter
             && p.Type == BlockType.Operator
             && p.Text == ":")
         {
-
             if (start != null && start.Parent != null && start.Parent.Pre == "(")
             {
                 return false;
@@ -701,7 +759,8 @@ public class AssemblyConverter
                 if (block.Text == "," && block.NextNonWhiteSpace is Block nt
                     && nt != null
                     && nt.Text != null
-                    && (nt.Text.StartsWith(';') || nt.Text == (Environment.NewLine)))
+                    && (nt.Text.StartsWith(';') 
+                    || nt.Text == Environment.NewLine))
                 {
                     block.Text = "";
                     block.Type = BlockType.WhiteSpace;
@@ -709,8 +768,13 @@ public class AssemblyConverter
             }
             else if (block.Type == BlockType.Identifier)
             {
-                //fix .BYTE
-                if (false && block.FindForwardingByLineNumber(":", BlockType.Operator) is Block fwd && fwd != null)
+                if(block.Parent!=null && block.Parent.Children.Count == 1
+                    //&& block.Pre=="("&&block.Post==")"
+                )
+                {
+
+                }
+                if (block.FindForwardingByLineNumber(":", BlockType.Operator) is Block fwd && fwd != null)
                 {
                     if (fwd == block.PreviousNonWhiteSpace)
                     {
@@ -720,16 +784,20 @@ public class AssemblyConverter
                             cmt == block.NextNonWhiteSpace
                             )
                         {
-                            final_blocks.Add(new() { Text = ".BYTE", Type = BlockType.Identifier });
-                            final_blocks.Add(new() { Text = " ", Type = BlockType.WhiteSpace });
-                            final_blocks.Add(block);
-                            continue;
+                            if (!INSTRUCTIONS.Contains(block.Text ?? ""))
+                            {
+                                final_blocks.Add(new() { Text = ".BYTE", Type = BlockType.Identifier });
+                                final_blocks.Add(new() { Text = " ", Type = BlockType.WhiteSpace });
+                                final_blocks.Add(block);
+                                continue;
+                            }
                         }
                     }
                 }
                 if (block.FindFollowingByLineNumber(",", BlockType.Operator) is Block op
                     && op != null && (op.Next == null || op.Next != null && op.Next.Text == Environment.NewLine))
                 {
+                    //remove trailing ","
                     op.Text = "";
                     op.Type = BlockType.WhiteSpace;
                     final_blocks.Add(block);

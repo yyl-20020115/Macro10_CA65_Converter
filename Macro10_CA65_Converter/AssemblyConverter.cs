@@ -768,12 +768,6 @@ public class AssemblyConverter
             }
             else if (block.Type == BlockType.Identifier)
             {
-                if(block.Parent!=null && block.Parent.Children.Count == 1
-                    //&& block.Pre=="("&&block.Post==")"
-                )
-                {
-
-                }
                 if (block.FindForwardingByLineNumber(":", BlockType.Operator) is Block fwd && fwd != null)
                 {
                     if (fwd == block.PreviousNonWhiteSpace)
